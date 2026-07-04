@@ -1,8 +1,8 @@
 streamlit
 langchain-core
+langchain-community
 langchain-groq
 pypdf
 beautifulsoup4
 youtube-transcript-api
-youtube-dl
 pytube
