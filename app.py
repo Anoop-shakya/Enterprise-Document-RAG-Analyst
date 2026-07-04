@@ -42,7 +42,6 @@ with st.sidebar:
                 current_block = []
                 words = 0
                 
-                # Page-by-page streaming safely scales past 600+ pages without server RAM explosions
                 for page_idx, page in enumerate(reader.pages):
                     text = page.extract_text()
                     if text:
@@ -50,7 +49,6 @@ with st.sidebar:
                             if line.strip():
                                 current_block.append(line.strip())
                                 words += len(line.split())
-                                # Standardized 150-word semantic frame slicing
                                 if words >= 150:
                                     paragraphs.append(" ".join(current_block))
                                     current_block = []
@@ -67,7 +65,6 @@ with st.sidebar:
                     html = urllib.request.urlopen(req).read()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Automatically isolate body copy text, omitting script/style code noise
                     for s in soup(['script', 'style', 'nav', 'footer', 'header']):
                         s.decompose()
                     raw_lines = [p.get_text().strip() for p in soup.find_all(['p', 'h1', 'h2', 'h3', 'li'])]
@@ -78,9 +75,9 @@ with st.sidebar:
     elif source_type == "YouTube Video Transcript":
         yt_url = st.text_input("Enter Public YouTube Video URL:")
         if yt_url and st.button("Extract Video Transcripts"):
-            with st.spinner("Connecting to YouTube Subtitle Matrices..."):
+            with st.spinner("Connecting to YouTube Cloud Layers..."):
                 try:
-                    # Clean and isolated integration using Langchain Community
+                    # Target the Langchain loader directly
                     from langchain_community.document_loaders import YoutubeLoader
                     loader = YoutubeLoader.from_youtube_url(yt_url, add_video_info=False)
                     video_docs = loader.load()
@@ -89,17 +86,36 @@ with st.sidebar:
                         words = full_transcript.split()
                         paragraphs = [" ".join(words[i:i+150]) for i in range(0, len(words), 150)]
                     else:
-                        st.error("No transcript found for this video link.")
+                        raise ValueError("Subtitles restricted.")
                 except Exception as e:
-                    st.error(f"Transcript Ingestion Blocked: {str(e)}")
+                    # ENTERPRISE FALLBACK LAYER: If cloud IP is banned by YouTube transcripts, scrape DOM layout directly
+                    st.warning("🔄 YouTube Subtitle API restricted by cloud IP. Executing deep HTML metadata fallback...")
+                    try:
+                        req = urllib.request.Request(yt_url, headers={'User-Agent': 'Mozilla/5.0'})
+                        html = urllib.request.urlopen(req).read()
+                        soup = BeautifulSoup(html, 'html.parser')
+                        
+                        # Extract title and video description elements from meta tags (Unblockable by IP bans)
+                        title = soup.find("meta", name="title")
+                        desc = soup.find("meta", name="description")
+                        
+                        extracted_meta = []
+                        if title: extracted_meta.append(f"Video Title: {title['content']}")
+                        if desc: extracted_meta.append(f"Video Context Summary: {desc['content']}")
+                        
+                        if extracted_meta:
+                            paragraphs = extracted_meta
+                        else:
+                            st.error("Extraction Failure: This specific video has structural scrap constraints.")
+                    except Exception as fallback_err:
+                        st.error(f"Ultimate System Block: {str(fallback_err)}")
 
     st.markdown("---")
     if paragraphs:
-        # Cache text layers into the global memory structure safely
         st.session_state.global_knowledge_cache[tenant_key] = {
             "paragraphs": paragraphs
         }
-        st.sidebar.success(f"🔥 Live Ingestion Complete! Cached {len(paragraphs)} document nodes.")
+        st.sidebar.success(f"🔥 Live Ingestion Complete! Cached {len(paragraphs)} data nodes.")
 
 # 3. Dynamic Conversation Rendering Interface
 for message in st.session_state.chat_history:
@@ -118,42 +134,32 @@ if user_query := st.chat_input("Ask a question in any language..."):
             db = st.session_state.global_knowledge_cache.get(tenant_key)
             if db:
                 clean_query = user_query.lower().strip()
-                
-                # --- ADVANCED STRUCTURAL SCANNER ---
-                # Strips punctuation for clean root matching (e.g., matching "student" with "students")
                 query_words = [re.sub(r'[^\w]', '', w) for w in clean_query.split() if len(w) > 2]
                 matched_segments = []
                 
                 for p in db["paragraphs"]:
                     p_lower = p.lower()
-                    # Check how many words from our query intersect with this paragraph
                     match_count = sum(1 for word in query_words if word in p_lower)
                     if match_count > 0:
                         matched_segments.append((match_count, p))
                 
-                # Sort sections by the highest keyword overlap density
-                matched_segments.sort(key=lambda x: x[0], reverse=True)
-                retrieved_chunks = [item[1] for item in matched_segments[:4]]
-                
-                # Fallback to initial pages if no exact terms collide
+                matched_segments.sort(key=lambda x: x, reverse=True)
+                retrieved_chunks = [item for item in matched_segments[:4]]
                 context_str = "\n---\n".join(retrieved_chunks) if retrieved_chunks else "\n---\n".join(db["paragraphs"][:2])
             else:
                 context_str = "Zero operational context indices loaded into memory."
 
             if groq_api_key:
                 os.environ["GROQ_API_KEY"] = groq_api_key
-                
-                # ULTIMATE ACTIVE MODEL FIX: Utilizing the flagship open-weight 120B model via Groq API
                 llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0.1)
                 
                 system_prompt = (
                     "You are a global-grade Omni-Channel Enterprise Knowledge Architect.\n"
                     "CORE MULTI-LINGUAL CAPABILITY: Respond fluently in the exact same language used by the user in their prompt query.\n\n"
                     "OPERATIONAL PRINCIPLES:\n"
-                    "1. Analyze the provided context carefully to answer the question, including headings, chapter names, page details, or text content.\n"
-                    "2. If the user asks general engineering system designs, flowcharts, or computer science concepts "
-                    "not explicitly written in the document, seamlessly combine your global training intelligence with the document data "
-                    "to provide an exhaustive, deep response. Never state that you cannot locate a data match.\n\n"
+                    "1. Analyze the provided context carefully to answer the question, including headings, chapter names, or text content.\n"
+                    "2. If the context contains video metadata descriptions, expand upon that structural layout using your core intelligence to answer the query deeply.\n"
+                    "3. If the user asks general engineering system designs or computer science concepts, use your master training weights to provide an exhaustive response.\n\n"
                     "Extracted Knowledge Context:\n{context}"
                 )
                 prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{question}")])
@@ -166,4 +172,5 @@ if user_query := st.chat_input("Ask a question in any language..."):
                 response = type('', (), {'content': 'System Access Token Deficit.'})()
                 
     st.session_state.chat_history.append({"role": "assistant", "content": response.content})
+
 
