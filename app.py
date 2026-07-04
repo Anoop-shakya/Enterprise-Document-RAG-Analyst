@@ -5,7 +5,6 @@ import streamlit as st
 import urllib.request
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
-from youtube_transcript_api import YouTubeTranscriptApi
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 
@@ -43,7 +42,6 @@ with st.sidebar:
                 current_block = []
                 words = 0
                 
-                # Page-by-page streaming safely scales past 600+ pages without server RAM explosions
                 for page_idx, page in enumerate(reader.pages):
                     text = page.extract_text()
                     if text:
@@ -51,7 +49,6 @@ with st.sidebar:
                             if line.strip():
                                 current_block.append(line.strip())
                                 words += len(line.split())
-                                # Standardized 150-word semantic frame slicing
                                 if words >= 150:
                                     paragraphs.append(" ".join(current_block))
                                     current_block = []
@@ -68,7 +65,6 @@ with st.sidebar:
                     html = urllib.request.urlopen(req).read()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Automatically isolate body copy text, omitting script/style code noise
                     for s in soup(['script', 'style', 'nav', 'footer', 'header']):
                         s.decompose()
                     raw_lines = [p.get_text().strip() for p in soup.find_all(['p', 'h1', 'h2', 'h3', 'li'])]
@@ -79,26 +75,23 @@ with st.sidebar:
     elif source_type == "YouTube Video Transcript":
         yt_url = st.text_input("Enter Public YouTube Video URL:")
         if yt_url and st.button("Extract Video Transcripts"):
-            with st.spinner("Connecting to Google Video Subtitle Matrices..."):
+            with st.spinner("Connecting to YouTube Subtitle Matrices..."):
                 try:
-                    # Regex extractor to fetch alphanumeric video ID sequence
-                    video_id_match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', yt_url)
-                    if video_id_match:
-                        video_id = video_id_match.group(1)
-                        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-                        full_transcript = " ".join([t['text'] for t in transcript_list])
-                        
-                        # Slice conversational transcript stream blocks evenly into vector packages
+                    # Native call directly via specialized langchain component bypasses naming conflicts
+                    from langchain_community.document_loaders import YoutubeLoader
+                    loader = YoutubeLoader.from_youtube_url(yt_url, add_video_info=False)
+                    video_docs = loader.load()
+                    if video_docs:
+                        full_transcript = video_docs[0].page_content
                         words = full_transcript.split()
                         paragraphs = [" ".join(words[i:i+150]) for i in range(0, len(words), 150)]
                     else:
-                        st.error("Invalid Configuration: Could not locate a valid 11-digit YouTube video token ID.")
+                        st.error("No transcript found for this video link.")
                 except Exception as e:
                     st.error(f"Transcript Ingestion Blocked: {str(e)}")
 
     st.markdown("---")
     if paragraphs:
-        # Cache text layers into the global memory structure safely
         st.session_state.global_knowledge_cache[tenant_key] = {
             "paragraphs": paragraphs
         }
@@ -110,7 +103,7 @@ for message in st.session_state.chat_history:
         st.markdown(message["content"])
 
 # 4. Multi-Lingual Structural Search Engine Loop
-if user_query := st.chat_input("Ask a question in any language (English, Hindi, Spanish, etc.)..."):
+if user_query := st.chat_input("Ask a question in any language..."):
     with st.chat_message("user"):
         st.markdown(user_query)
     st.session_state.chat_history.append({"role": "user", "content": user_query})
@@ -121,32 +114,23 @@ if user_query := st.chat_input("Ask a question in any language (English, Hindi, 
             db = st.session_state.global_knowledge_cache.get(tenant_key)
             if db:
                 clean_query = user_query.lower().strip()
-                
-                # --- ADVANCED STRUCTURAL SCANNER ---
-                # Strips punctuation for clean root matching (e.g., matching "student" with "students")
                 query_words = [re.sub(r'[^\w]', '', w) for w in clean_query.split() if len(w) > 2]
                 matched_segments = []
                 
                 for p in db["paragraphs"]:
                     p_lower = p.lower()
-                    # Check how many words from our query intersect with this paragraph
                     match_count = sum(1 for word in query_words if word in p_lower)
                     if match_count > 0:
                         matched_segments.append((match_count, p))
                 
-                # Sort sections by the highest keyword overlap density
                 matched_segments.sort(key=lambda x: x[0], reverse=True)
                 retrieved_chunks = [item[1] for item in matched_segments[:4]]
-                
-                # Fallback to initial pages if no exact terms collide
                 context_str = "\n---\n".join(retrieved_chunks) if retrieved_chunks else "\n---\n".join(db["paragraphs"][:2])
             else:
                 context_str = "Zero operational context indices loaded into memory."
 
             if groq_api_key:
                 os.environ["GROQ_API_KEY"] = groq_api_key
-                
-                # FIXED MODEL CONFIGURATION: Utilizing the active 120B model via Groq API
                 llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0.1)
                 
                 system_prompt = (
@@ -156,7 +140,7 @@ if user_query := st.chat_input("Ask a question in any language (English, Hindi, 
                     "1. Analyze the provided context carefully to answer the question, including headings, chapter names, or text content.\n"
                     "2. If the user asks general engineering system designs, flowcharts, or computer science concepts "
                     "not explicitly written in the document, seamlessly combine your global training intelligence with the document data "
-                    "to provide an exhaustive, deep response. Never state that you cannot locate a data match.\n\n"
+                    "to provide an exhaustive, deep response.\n\n"
                     "Extracted Knowledge Context:\n{context}"
                 )
                 prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{question}")])
